@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Generated artifacts (checkpoints, logs, backtest outputs)
+artifacts/
+
+# Data cache (re-fetchable via scripts/fetch_data.py)
+data/*.csv
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,62 @@
+# MarketZero default configuration (see marketzero/config.py for all fields)
+
+# ---- data ----
+data_symbol: "BTC-USD"
+data_start: "2014-01-01"
+data_cache: "data/btc_usd_daily.csv"
+
+# ---- environment ----
+feat_window: 8              # lagged daily log-returns in the observation
+env_fee_rate: 0.001         # 0.1% fee per unit of turnover (per side)
+env_episode_len: 252        # self-play episode: 1 trading year (crypto = 365d/yr, ~252 used as convention)
+env_n_actions: 3            # 3 = {-1,0,+1}; 5 = {-1,-.5,0,+.5,+1}; 2 = spot-only {0,+1}
+env_gamma: 0.997            # daily discount
+
+# ---- MuZero networks ----
+model_hidden: 128
+model_latent: 64
+model_support: 10           # value/reward support: 21 bins on [-1, 1]
+
+# ---- MCTS ----
+mcts_sims: 32               # simulations per move during self-play
+mcts_eval_sims: 32          # simulations per move during evaluation
+mcts_c_puct: 1.25
+mcts_dirichlet_alpha: 0.3
+mcts_dirichlet_epsilon: 0.25
+mcts_temperature: 1.0       # tau for the first mcts_temp_explore_steps of an episode
+mcts_temp_explore_steps: 60 # then exploit at mcts_temp_late
+mcts_temp_late: 0.25        # 0 = pure argmax
+mcts_max_depth: 4           # tree depth cap in bars (0 = unbounded)
+mcts_chance_scenarios: 0    # >0 enables Phase-2 scenario reranking at eval
+mcts_chance_horizon: 4
+mcts_chance_weight: 0.25    # max fraction of sims the rerank can shift
+
+# ---- training ----
+train_games_per_iter: 8
+train_epochs_per_iter: 10
+train_batch_size: 128
+train_unroll: 5
+train_lr: 0.001
+train_weight_decay: 0.0001
+train_w_value: 1.0          # blueprint loss weights v:p:r = 1.0:1.0:0.5
+train_w_policy: 1.0
+train_w_reward: 0.5
+train_seed: 42
+buffer_capacity: 512        # replay buffer capacity (games)
+
+# ---- walk-forward ----
+eval_train_window: 730      # ~2y rolling fit
+eval_test_window: 90        # quarterly OOS tests
+eval_purge: 10              # purge+embargo days at each boundary
+eval_anchored: false        # true = expanding window
+eval_wf_games: 6            # demo budget per window -- raise for research
+eval_wf_epochs: 8
+
+# ---- risk ----
+risk_max_drawdown: 0.20     # kill-switch episode drawdown
+risk_max_daily_loss: 0.08   # kill-switch single-day loss
+risk_vol_target: 0.15       # annualized vol target (null disables)
+risk_apply_vol_target: true # actually scale positions by the vol target
+
+# ---- live gating ----
+allow_live: false           # paper trader refuses live unless all gates pass

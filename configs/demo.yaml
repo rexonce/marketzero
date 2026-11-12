@@ -1,0 +1,18 @@
+# Demo-budget config: same machinery, smaller numbers so a full loop runs in
+# minutes on CPU. For research raise mcts_sims/episode lengths/games/epochs
+# toward configs/default.yaml and expect hours-to-days, not minutes.
+
+env_episode_len: 128
+mcts_sims: 16
+mcts_eval_sims: 12
+train_games_per_iter: 4
+train_epochs_per_iter: 8
+train_batch_size: 96
+train_unroll: 5
+
+eval_train_window: 730
+eval_test_window: 180
+eval_purge: 10
+eval_anchored: false
+eval_wf_games: 3
+eval_wf_epochs: 5
