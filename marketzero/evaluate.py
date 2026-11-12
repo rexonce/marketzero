@@ -147,16 +147,23 @@ def walk_forward_windows(T: int, cfg: Config):
 
 
 def fit_on_window(net: MuZeroNet, features, mu, dates, cfg: Config,
-                  train_start: int, train_end: int, seed: int) -> dict:
-    """Self-play + training inside a training window (fresh buffer)."""
+                  train_start: int, train_end: int, seed: int,
+                  buffer: ReplayBuffer | None = None,
+                  trainer: MuZeroTrainer | None = None) -> dict:
+    """Self-play + training inside a training window.
+
+    With a shared `buffer`/`trainer` (warm-start mode) experience accumulates
+    across windows; otherwise each window trains from scratch."""
     rng = np.random.default_rng(seed)
-    buffer = ReplayBuffer(capacity=cfg.buffer_capacity, seed=seed,
-                          alpha=cfg.buffer_priority_alpha,
-                          is_beta=cfg.buffer_is_beta)
+    if buffer is None:
+        buffer = ReplayBuffer(capacity=cfg.buffer_capacity, seed=seed,
+                              alpha=cfg.buffer_priority_alpha,
+                              is_beta=cfg.buffer_is_beta)
     env = TradingEnv(features[train_start:train_end], mu[train_start:train_end],
                      dates=None, fee_rate=cfg.env_fee_rate,
                      n_actions=cfg.env_n_actions, obs_window=cfg.obs_window)
-    trainer = MuZeroTrainer(net, cfg)
+    if trainer is None:
+        trainer = MuZeroTrainer(net, cfg)
     losses = {}
     for g in range(cfg.eval_wf_games):
         game = play_episode(env, net, cfg, rng, training=True)
@@ -175,9 +182,27 @@ def walk_forward(features: np.ndarray, mu: np.ndarray, dates, cfg: Config,
     stitched: list[np.ndarray] = []
     per_window = []
     device = auto_device(cfg)
+    net = warm_buf = warm_trainer = None
     for w_i, (ts_, te_, vs, ve) in enumerate(windows):
-        net = build_net(features.shape[1], cfg, device, cfg.train_seed + w_i)
-        fit_on_window(net, features, mu, dates, cfg, ts_, te_, seed=cfg.train_seed + w_i)
+        # warm start: one persistent net + buffer + trainer across windows --
+        # production-style periodic retraining, still strictly causal since
+        # each test window was embargoed before its fit began.
+        if not cfg.eval_warm_start or net is None:
+            net = build_net(features.shape[1], cfg, device,
+                            cfg.train_seed + w_i)
+        if cfg.eval_warm_start:
+            if warm_buf is None:
+                warm_buf = ReplayBuffer(
+                    capacity=cfg.buffer_capacity, seed=cfg.train_seed,
+                    alpha=cfg.buffer_priority_alpha,
+                    is_beta=cfg.buffer_is_beta)
+                warm_trainer = MuZeroTrainer(net, cfg)
+            fit_on_window(net, features, mu, dates, cfg, ts_, te_,
+                          seed=cfg.train_seed + w_i, buffer=warm_buf,
+                          trainer=warm_trainer)
+        else:
+            fit_on_window(net, features, mu, dates, cfg, ts_, te_,
+                          seed=cfg.train_seed + w_i)
         df = run_policy(net, features, mu, dates, vs, ve, cfg, ohlcv=ohlcv)
         stitched.append(df["reward"].to_numpy())
         stats = M.summary(df["reward"].to_numpy())

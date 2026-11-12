@@ -1,0 +1,61 @@
+# Overnight research run: blueprint architecture at serious budget.
+# Same machinery as gpu.yaml, scaled for a full P2 walk-forward attempt:
+# warm-started net across windows, 16 games/20 epochs per window fit,
+# 160-sim eval search, prioritized replay, n-step bootstrap.
+
+feat_window: 8
+obs_window: 64
+env_fee_rate: 0.001
+env_episode_len: 256
+env_n_actions: 5
+env_gamma: 0.997
+
+model_hidden: 192
+model_latent: 128
+model_support: 10
+model_tx_layers: 2
+
+mcts_sims: 96
+mcts_eval_sims: 160         # search harder at eval than during self-play
+mcts_c_puct: 1.25
+mcts_dirichlet_alpha: 0.3
+mcts_dirichlet_epsilon: 0.25
+mcts_temperature: 1.0
+mcts_temp_explore_steps: 60
+mcts_temp_late: 0.25
+mcts_max_depth: 6
+mcts_leaf_batch: 24
+mcts_chance_scenarios: 0
+mcts_chance_sampler: bootstrap
+kronos_model: NeoQuasar/Kronos-mini
+
+train_games_per_iter: 8
+train_epochs_per_iter: 10
+train_batch_size: 256
+train_unroll: 5
+train_lr: 0.001
+train_weight_decay: 0.0001
+train_w_value: 1.0
+train_w_policy: 1.0
+train_w_reward: 0.5
+train_seed: 42
+train_reanalyze_games: 2
+train_td_steps: 40
+buffer_capacity: 1024       # bigger replay memory for warm-start mode
+buffer_priority_alpha: 1.0
+buffer_is_beta: 0.5
+
+eval_train_window: 730
+eval_test_window: 180
+eval_purge: 10
+eval_anchored: false
+eval_warm_start: true       # carry net+buffer across windows (causal)
+eval_wf_games: 16           # 2x per-window self-play budget
+eval_wf_epochs: 20          # 2.5x training epochs per window
+
+risk_max_drawdown: 0.20
+risk_max_daily_loss: 0.08
+risk_vol_target: 0.15
+risk_apply_vol_target: true
+
+allow_live: false

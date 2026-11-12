@@ -85,6 +85,9 @@ class Config:
     eval_anchored: bool = False             # expanding (True) vs rolling train
     eval_wf_games: int = 6                  # self-play games per window fit
     eval_wf_epochs: int = 8                 # training epochs per window fit
+    eval_warm_start: bool = False           # carry net+buffer across windows
+                                          # (production-style periodic retrain;
+                                          # still strictly causal per window)
 
     # --- risk -------------------------------------------------------------------
     risk_max_drawdown: float = 0.20         # kill-switch: episode DD from peak
