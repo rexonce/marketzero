@@ -34,7 +34,10 @@ def main() -> int:
     np.random.seed(cfg.train_seed)
     import torch
     torch.manual_seed(cfg.train_seed)
-    device = "cpu" if cfg.train_device == "auto" else cfg.train_device
+    if cfg.train_device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    else:
+        device = cfg.train_device
 
     df, source = load_daily(cfg.data_symbol, cfg.data_start,
                             cfg.resolved_path(cfg.data_cache))
@@ -45,11 +48,16 @@ def main() -> int:
     mu = logret.to_numpy()
 
     env = TradingEnv(Xs[:cut], mu[:cut], dates=list(df.index[:cut]),
-                     fee_rate=cfg.env_fee_rate, n_actions=cfg.env_n_actions)
-    net = MuZeroNet(Xs.shape[1] + 1, cfg.env_n_actions, cfg.model_hidden,
-                    cfg.model_latent, cfg.model_support).to(device)
+                     fee_rate=cfg.env_fee_rate, n_actions=cfg.env_n_actions,
+                     obs_window=cfg.obs_window)
+    net = MuZeroNet(env.n_features, cfg.env_n_actions, cfg.model_hidden,
+                    cfg.model_latent, cfg.model_support,
+                    window=cfg.obs_window, n_feat=Xs.shape[1],
+                    tx_layers=cfg.model_tx_layers).to(device)
     trainer = MuZeroTrainer(net, cfg)
-    buffer = ReplayBuffer(capacity=cfg.buffer_capacity, seed=cfg.train_seed)
+    buffer = ReplayBuffer(capacity=cfg.buffer_capacity, seed=cfg.train_seed,
+                          alpha=cfg.buffer_priority_alpha,
+                          is_beta=cfg.buffer_is_beta)
     rng = np.random.default_rng(cfg.train_seed)
 
     out_path = cfg.resolved_path(args.out)
@@ -60,12 +68,21 @@ def main() -> int:
         ep_ret, ep_dd = [], []
         for _ in range(cfg.train_games_per_iter):
             game = play_episode(env, net, cfg, rng, training=True)
-            buffer.append(game)
+            buffer.append(game, trainer.value_scale)
             ep_ret.append(float(np.exp(sum(game.rewards)) - 1.0))
             eq = np.exp(np.cumsum(game.rewards))
             ep_dd.append(float((1 - eq / np.maximum.accumulate(eq)).max()))
         losses = trainer.train_epochs(buffer, cfg.train_epochs_per_iter)
+        reanalysed = 0
+        if cfg.train_reanalyze_games > 0 and buffer.games:
+            from marketzero.actor import reanalyze_game
+            for _ in range(min(cfg.train_reanalyze_games, len(buffer.games))):
+                g_old = buffer.games[int(rng.integers(0, len(buffer.games)))]
+                reanalyze_game(g_old, net, cfg)
+                buffer.refresh_priorities(g_old, trainer.value_scale)
+                reanalysed += 1
         rec = {"iter": it, "games": cfg.train_games_per_iter,
+               "reanalysed": reanalysed,
                "mean_episode_return": round(float(np.mean(ep_ret)), 4),
                "mean_episode_maxdd": round(float(np.mean(ep_dd)), 4),
                "buffer_steps": buffer.total_steps(), "elapsed_s": round(time.time() - t0, 1),

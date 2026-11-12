@@ -24,7 +24,7 @@ class PaperTrader:
     def __init__(self, checkpoint: Path, cfg: Config | None = None, device: str = "cpu"):
         self.net, ckpt_cfg, payload = load_checkpoint(checkpoint, device)
         self.cfg = cfg or ckpt_cfg
-        for f in ("env_n_actions", "feat_window", "model_support"):
+        for f in ("env_n_actions", "feat_window", "model_support", "obs_window"):
             if getattr(self.cfg, f) != getattr(ckpt_cfg, f):
                 raise ValueError(
                     f"config/checkpoint mismatch on {f}: "
@@ -60,7 +60,8 @@ class PaperTrader:
         mu = logrets.to_numpy()
         start = max(1, len(df) - last_n)
         env = TradingEnv(feats, mu, dates=list(df.index), fee_rate=self.cfg.env_fee_rate,
-                         n_actions=self.cfg.env_n_actions)
+                         n_actions=self.cfg.env_n_actions,
+                         obs_window=self.cfg.obs_window)
         obs = env.reset(start=start, episode_len=len(df) - start - 1)
         rows, done = [], False
         while not done:

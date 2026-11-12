@@ -43,17 +43,25 @@ class EpisodeStats:
 
 
 class TradingEnv:
-    """Replays a fixed slice of (scaled features, log-returns)."""
+    """Replays a fixed slice of (scaled features, log-returns).
+
+    obs_window <= 1: observation is feats[i] ++ [exposure] (flat vector).
+    obs_window > 1: observation is a zero-padded window of the last
+    obs_window bars' features, flattened, ++ [exposure]."""
 
     def __init__(self, features: np.ndarray, log_returns: np.ndarray,
-                 dates=None, fee_rate: float = 0.001, n_actions: int = 3):
+                 dates=None, fee_rate: float = 0.001, n_actions: int = 3,
+                 obs_window: int = 0):
         assert len(features) == len(log_returns), "feature/return length mismatch"
         self.feat = np.asarray(features, dtype=np.float32)
         self.mu = np.asarray(log_returns, dtype=np.float64)
         self.dates = dates
         self.fee_rate = fee_rate
         self.n_actions = n_actions
-        self.n_features = self.feat.shape[1] + 1  # + position column
+        self.window = max(0, obs_window)
+        self.n_bar_feat = self.feat.shape[1]
+        self.n_features = (self.window * self.n_bar_feat + 1) if self.window > 1 \
+            else self.n_bar_feat + 1
         self.T = len(self.mu)
         self.i = 0
         self._end = self.T - 1
@@ -80,6 +88,14 @@ class TradingEnv:
         self._forced_flat = True
 
     def obs(self) -> np.ndarray:
+        if self.window > 1:
+            lo = max(0, self.i - self.window + 1)
+            win = self.feat[lo:self.i + 1]
+            pad = self.window - win.shape[0]
+            if pad:
+                win = np.vstack([np.zeros((pad, self.n_bar_feat),
+                                          dtype=np.float32), win])
+            return np.append(win.reshape(-1), float(self.w)).astype(np.float32)
         return np.append(self.feat[self.i], float(self.w)).astype(np.float32)
 
     def step(self, action: int, size_scale: float = 1.0) -> tuple[np.ndarray, float, bool, dict]:

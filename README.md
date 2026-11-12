@@ -25,6 +25,8 @@ pytest                                   # unit tests
 ```
 
 To customize: `python scripts/train.py --config configs/default.yaml`.
+With a CUDA GPU: `--config configs/gpu.yaml` (transformer h, 5 actions,
+96 sims, prioritized replay, n-step bootstrap — `train_device: auto`).
 
 ## Architecture
 
@@ -55,13 +57,21 @@ To customize: `python scripts/train.py --config configs/default.yaml`.
  agent vs buy&hold, net of fees                                                    foundation model)
 ```
 
-**How a decision happens:** the observation (17 floats: lagged returns, trend,
-vol, momentum, range, current position) enters `h` → latent state; MCTS runs
-PUCT simulations through `g`'s predicted futures guided by `f`'s priors and
-values; the root visit distribution is the acting policy. Training replays
-stored games, unrolls `g` five steps, and pushes `f`'s predictions toward the
-search's improved policies and the realized returns — search output is the
-teacher (that's the AlphaZero trick, translated by MuZero to unknown rules).
+**How a decision happens:** the observation (a 64-bar window of 16 causal
+per-bar features plus the current exposure) enters `h` — a transformer
+encoder over bar tokens — producing a latent state; MCTS runs PUCT
+simulations through `g`'s predicted futures guided by `f`'s priors and
+values (MinMaxStats-normalized, wave-batched leaf evals, depth-capped); the
+root visit distribution is the acting policy. Training replays stored games
+(optionally prioritized by |z − v̂| surprise with IS correction), unrolls `g`
+five steps with canonical 1/K step weighting and 0.5× hidden-state gradient
+scaling, and pushes `f`'s predictions toward the search's improved policies
+and n-step-bootstrapped returns — search output is the teacher (that's the
+AlphaZero trick, translated by MuZero to unknown rules). Reanalysis
+refreshes stored games with the latest network each iteration. At eval, a
+Phase-2 hook can re-score root actions against sampled market paths —
+block-bootstrap or the Kronos foundation model (`mcts_chance_sampler`).
+(Set `obs_window: 1` for the original flat 17-float vector + MLP encoder.)
 
 ## What the honest checks assert
 
@@ -79,16 +89,17 @@ teacher (that's the AlphaZero trick, translated by MuZero to unknown rules).
 |---|---|
 | `marketzero/config.py` | all hyperparameters (flat dataclass, YAML-loadable) |
 | `marketzero/data.py` | Yahoo fetch + cache, synthetic fallback, features, scaler |
-| `marketzero/environment.py` | market replay env, fee math, log-equity reward |
-| `marketzero/models.py` | h/g/f networks, two-hot value/reward support |
-| `marketzero/mcts.py` | PUCT search, Dirichlet exploration, backup |
-| `marketzero/buffer.py` | replay buffer, game/position sampling |
-| `marketzero/actor.py` | self-play episode runner |
-| `marketzero/trainer.py` | K-step unroll losses, checkpoints |
-| `marketzero/evaluate.py` | policy replay, walk-forward windows, registry |
+| `marketzero/environment.py` | market replay env, fee math, log-equity reward, fractional sizing |
+| `marketzero/models.py` | h/g/f networks (transformer or MLP h), two-hot support |
+| `marketzero/mcts.py` | PUCT search, MinMaxStats, Dirichlet noise, wave-batched leaves, depth cap |
+| `marketzero/buffer.py` | replay buffer, uniform or prioritized sampling + IS weights |
+| `marketzero/actor.py` | self-play episode runner, reanalysis |
+| `marketzero/trainer.py` | K-step unroll losses, n-step bootstrap, checkpoints |
+| `marketzero/evaluate.py` | policy replay, walk-forward windows, chance-node rerank, registry |
 | `marketzero/risk.py` | kill-switch governor, vol-targeted sizing |
 | `marketzero/kronos.py` | bootstrap/Kronos scenario sampling (Phase 2 hook) |
 | `marketzero/paper.py` | paper trader, live-mode refusal gates |
+| `configs/gpu.yaml` | blueprint-aligned research preset (5 actions, 96 sims, transformer h) |
 | `docs/DEEP_DIVE.md` | the full conceptual explanation, with sources |
 
 ## Roadmap

@@ -86,3 +86,19 @@ def test_synthetic_data_shape():
     assert len(df) == 500
     assert set(["open", "high", "low", "close", "volume"]) <= set(df.columns)
     assert (df["high"] >= df["low"]).all()
+
+
+def test_windowed_observation():
+    """Windowed obs = last W bars flattened + exposure; early bars zero-pad."""
+    feats = np.arange(30 * 2, dtype=np.float32).reshape(30, 2)
+    env = TradingEnv(feats, np.zeros(30), obs_window=4, n_actions=3)
+    obs = env.reset(start=5, episode_len=3)
+    assert obs.shape == (4 * 2 + 1,)
+    win = obs[:-1].reshape(4, 2)
+    assert (win[-1] == feats[5]).all()         # last bar of window = day 5
+    assert (win[-4] == feats[2]).all()         # full 4-bar history available
+    env2 = TradingEnv(feats, np.zeros(30), obs_window=4, n_actions=3)
+    obs2 = env2.reset(start=1, episode_len=3)
+    win2 = obs2[:-1].reshape(4, 2)
+    assert (win2[:2] == 0).all()               # zero-padded before day 0
+    assert (win2[3] == feats[1]).all()

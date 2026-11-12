@@ -45,7 +45,8 @@ def main() -> int:
     print(f"budget per window: {cfg.eval_wf_games} games x {cfg.eval_wf_epochs} epochs "
           f"(demo budget -- raise substantially for research)")
     result = walk_forward(Xs, logret.to_numpy(), list(df.index), cfg,
-                          cfg.resolved_path(args.out_dir), tag=args.tag)
+                          cfg.resolved_path(args.out_dir), tag=args.tag,
+                          ohlcv=df)
 
     print("\n=== stitched out-of-sample summary ===")
     print(f"  agent    : {result['agent']}")

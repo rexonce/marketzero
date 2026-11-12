@@ -44,7 +44,7 @@ def two_hot_numpy(x: float, support: int) -> np.ndarray:
 
 # ------------------------------------------------------------------ networks
 class RepresentationNet(nn.Module):
-    """h(obs) -> latent state."""
+    """h(obs) -> latent state (flat observation vector)."""
 
     def __init__(self, obs_dim: int, hidden: int, latent: int):
         super().__init__()
@@ -56,6 +56,39 @@ class RepresentationNet(nn.Module):
 
     def forward(self, obs):
         return self.net(obs)
+
+
+class TransformerRepresentation(nn.Module):
+    """h(obs) -> latent state for windowed observations.
+
+    The observation is a W x F window of per-bar features plus the current
+    exposure, flattened to (W*F + 1). Each bar becomes a token; the account
+    state is injected as a broadcast embedding (blueprint §7), and attention
+    over bars lets the model locate regime structure without hand-coding."""
+
+    def __init__(self, n_feat: int, window: int, hidden: int, latent: int,
+                 n_layers: int = 2, n_heads: int = 4):
+        super().__init__()
+        self.n_feat, self.window = n_feat, window
+        self.token = nn.Linear(n_feat, hidden)
+        self.pos_emb = nn.Parameter(torch.zeros(1, window, hidden))
+        self.acct = nn.Linear(1, hidden)
+        layer = nn.TransformerEncoderLayer(
+            d_model=hidden, nhead=n_heads, dim_feedforward=hidden * 2,
+            batch_first=True, norm_first=True, dropout=0.0)
+        self.encoder = nn.TransformerEncoder(layer, num_layers=n_layers,
+                                             enable_nested_tensor=False)
+        self.head = nn.Sequential(
+            nn.Linear(hidden, hidden), nn.ReLU(), nn.Linear(hidden, latent))
+        nn.init.normal_(self.pos_emb, std=0.02)
+
+    def forward(self, obs):
+        B = obs.shape[0]
+        x = obs[:, : self.window * self.n_feat].reshape(B, self.window, self.n_feat)
+        w = obs[:, self.window * self.n_feat:]
+        t = self.token(x) + self.pos_emb + self.acct(w).unsqueeze(1)
+        h = self.encoder(t)
+        return self.head(h.mean(dim=1))
 
 
 class DynamicsNet(nn.Module):
@@ -94,14 +127,26 @@ class PredictionNet(nn.Module):
 
 
 class MuZeroNet(nn.Module):
-    """The complete MuZero model with batched inference helpers."""
+    """The complete MuZero model with batched inference helpers.
+
+    Windowed mode (window > 1): obs is a flattened (window * n_feat + 1)
+    vector and h is a transformer encoder over bar tokens.
+    Flat mode (window <= 1): obs is a (n_feat + 1) vector and h is an MLP."""
 
     def __init__(self, obs_dim: int, n_actions: int = 3,
-                 hidden: int = 128, latent: int = 64, support: int = 10):
+                 hidden: int = 128, latent: int = 64, support: int = 10,
+                 window: int = 0, n_feat: int = 0, tx_layers: int = 2):
         super().__init__()
         self.n_actions = n_actions
         self.support = support
-        self.rep = RepresentationNet(obs_dim, hidden, latent)
+        self.window = window
+        self.obs_dim = obs_dim
+        self.n_feat = n_feat if n_feat else obs_dim - 1
+        if window > 1:
+            self.rep = TransformerRepresentation(n_feat, window, hidden, latent,
+                                                 n_layers=tx_layers)
+        else:
+            self.rep = RepresentationNet(obs_dim, hidden, latent)
         self.dyn = DynamicsNet(latent, n_actions, hidden, support)
         self.pred = PredictionNet(latent, n_actions, hidden, support)
 
@@ -113,14 +158,16 @@ class MuZeroNet(nn.Module):
         value = logits_to_scalar(v_logits, self.support)
         return p_logits, value, torch.zeros_like(value), s
 
-    def recurrent_inference(self, state: torch.Tensor, action: int):
-        """One g+f step from a latent state. Accepts a single (1-D) latent or a
-        batch; returns (p_logits, value, reward, next_state) matching rank."""
+    def recurrent_inference(self, state: torch.Tensor, action):
+        """One g+f step from a latent state. `action` is an int for a single
+        transition or a 1-D tensor of ints for a batch of transitions."""
         single = state.dim() == 1
         if single:
             state = state.unsqueeze(0)
-        onehot = F.one_hot(torch.tensor([action], device=state.device),
-                           self.n_actions).float()
+        if isinstance(action, int):
+            action = torch.full((state.shape[0],), action,
+                                dtype=torch.long, device=state.device)
+        onehot = F.one_hot(action.to(state.device), self.n_actions).float()
         s_next, r_logits = self.dyn(state, onehot)
         p_logits, v_logits = self.pred(s_next)
         value = logits_to_scalar(v_logits, self.support)

@@ -27,6 +27,8 @@ class Config:
 
     # --- features / environment ----------------------------------------------
     feat_window: int = 8                    # lagged daily log-returns in obs
+    obs_window: int = 64                    # bars of history per observation
+                                          # (<=1 = flat feature vector mode)
     env_fee_rate: float = 0.001             # proportional fee per unit turnover
     env_episode_len: int = 252              # trading days per self-play episode
     env_n_actions: int = 3                  # 3: {-1,0,+1}, 5: {-.5 steps}, 2: {0,+1}
@@ -36,6 +38,8 @@ class Config:
     model_hidden: int = 128
     model_latent: int = 64
     model_support: int = 10                 # value/reward bins = 2*10+1 on [-1,1]
+    model_tx_layers: int = 2                # transformer encoder layers in h
+                                          # (windowed-obs mode only)
 
     # --- MCTS -----------------------------------------------------------------
     mcts_sims: int = 32                     # simulations per move (training)
@@ -50,6 +54,9 @@ class Config:
     mcts_chance_scenarios: int = 0          # >0: Phase-2 scenario rerank at eval
     mcts_chance_horizon: int = 4            # scenario planning horizon (bars)
     mcts_chance_weight: float = 0.25        # fraction of sims the rerank can shift
+    mcts_chance_sampler: str = "bootstrap"  # bootstrap | kronos
+    kronos_model: str = "NeoQuasar/Kronos-mini"  # HF repo id (mini=4M, base=102M)
+    mcts_leaf_batch: int = 8                # leaf evals batched per wave (1=serial)
 
     # --- training -------------------------------------------------------------
     train_games_per_iter: int = 8
@@ -63,8 +70,13 @@ class Config:
     train_w_policy: float = 1.0
     train_w_reward: float = 0.5
     train_seed: int = 42
-    train_device: str = "auto"
+    train_device: str = "auto"              # auto = cuda when available
+    train_reanalyze_games: int = 1          # buffer games re-searched per iter
+    train_td_steps: int = 0                 # 0 = full MC returns; >0 = n-step
+                                          # bootstrap with MCTS root values
     buffer_capacity: int = 512              # replay buffer capacity (games)
+    buffer_priority_alpha: float = 0.0      # 0 = uniform replay; ~1 canonical
+    buffer_is_beta: float = 0.5             # IS-correction exponent (0 = off)
 
     # --- walk-forward evaluation ----------------------------------------------
     eval_train_window: int = 730            # days used to fit per window

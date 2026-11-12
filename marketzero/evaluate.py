@@ -26,10 +26,23 @@ from .risk import RiskGovernor
 from .trainer import MuZeroTrainer, save_checkpoint
 
 
-def build_net(obs_dim: int, cfg: Config, device: str, seed: int) -> MuZeroNet:
-    torch_seed(obs_dim, seed)
-    net = MuZeroNet(obs_dim, cfg.env_n_actions, cfg.model_hidden,
-                    cfg.model_latent, cfg.model_support)
+def auto_device(cfg: Config) -> str:
+    if cfg.train_device != "auto":
+        return cfg.train_device
+    import torch
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def obs_dim_for(cfg: Config, n_feat: int) -> int:
+    return cfg.obs_window * n_feat + 1 if cfg.obs_window > 1 else n_feat + 1
+
+
+def build_net(n_feat: int, cfg: Config, device: str, seed: int) -> MuZeroNet:
+    torch_seed(n_feat, seed)
+    net = MuZeroNet(obs_dim_for(cfg, n_feat), cfg.env_n_actions, cfg.model_hidden,
+                    cfg.model_latent, cfg.model_support,
+                    window=cfg.obs_window, n_feat=n_feat,
+                    tx_layers=cfg.model_tx_layers)
     return net.to(device)
 
 
@@ -41,16 +54,27 @@ def torch_seed(_obs_dim: int, seed: int) -> None:
 
 def run_policy(net: MuZeroNet, features: np.ndarray, mu: np.ndarray, dates,
                start: int, end: int, cfg: Config, use_risk: bool = True,
-               verbose: bool = False) -> pd.DataFrame:
-    """Greedy (tau=0) replay of [start, end) with the risk governor active."""
+               verbose: bool = False, ohlcv: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Greedy (tau=0) replay of [start, end) with the risk governor active.
+
+    `ohlcv` is only needed when `mcts_chance_sampler == "kronos"`: it is the
+    raw OHLCV frame the scenario model forecasts from (causally sliced)."""
     env = TradingEnv(features[start:end], mu[start:end],
                      dates=dates[start:end] if dates is not None else None,
-                     fee_rate=cfg.env_fee_rate, n_actions=cfg.env_n_actions)
+                     fee_rate=cfg.env_fee_rate, n_actions=cfg.env_n_actions,
+                     obs_window=cfg.obs_window)
     gov = RiskGovernor(cfg) if use_risk else None
     sampler = None
+    sampler_kind = cfg.mcts_chance_sampler
     if cfg.mcts_chance_scenarios > 0:
-        from .kronos import BootstrapScenarioSampler
-        sampler = BootstrapScenarioSampler()
+        from .kronos import get_sampler
+        if sampler_kind == "kronos":
+            if ohlcv is None:
+                raise ValueError("kronos scenario sampler needs `ohlcv` df")
+            sampler = get_sampler("kronos", model_name=cfg.kronos_model,
+                                  device=auto_device(cfg))
+        else:
+            sampler = get_sampler("bootstrap")
     obs = env.reset(start=0)   # run to the end of the slice
     rows = []
     done = False
@@ -60,7 +84,10 @@ def run_policy(net: MuZeroNet, features: np.ndarray, mu: np.ndarray, dates,
         if sampler is not None:
             # Phase-2 hook (expectimax-lite): re-score root actions against
             # sampled market paths and let the scenarios shift visit counts.
-            action = _chance_rerank(net, obs, res, sampler, mu[:start + env.i], cfg)
+            # Context is causal: bars/returns through the current decision bar.
+            cut = start + env.i + 1
+            context = ohlcv.iloc[:cut] if sampler_kind == "kronos" else mu[:cut]
+            action = _chance_rerank(net, obs, res, sampler, context, cfg)
         scale = 1.0
         if gov is not None and cfg.risk_apply_vol_target:
             scale = gov.position_scale(env.w)
@@ -82,7 +109,7 @@ def run_policy(net: MuZeroNet, features: np.ndarray, mu: np.ndarray, dates,
 
 
 def _chance_rerank(net: MuZeroNet, obs: np.ndarray, mcts_res: dict, sampler,
-                   mu_history: np.ndarray, cfg: Config) -> int:
+                   context, cfg: Config) -> int:
     """Re-score the root's visit counts with scenario-path Q values.
 
     Each action's scenario Q (averaged discounted reward over sampled market
@@ -91,7 +118,7 @@ def _chance_rerank(net: MuZeroNet, obs: np.ndarray, mcts_res: dict, sampler,
     leader but not override a strong one."""
     from .kronos import scenario_q
     q = scenario_q(net, obs, list(range(net.n_actions)), sampler,
-                   mu_history, horizon=cfg.mcts_chance_horizon,
+                   context, horizon=cfg.mcts_chance_horizon,
                    n_scenarios=cfg.mcts_chance_scenarios, cfg=cfg)
     visits = mcts_res["visits"].astype(np.float64)
     qv = np.array([q[a] for a in range(net.n_actions)])
@@ -123,31 +150,35 @@ def fit_on_window(net: MuZeroNet, features, mu, dates, cfg: Config,
                   train_start: int, train_end: int, seed: int) -> dict:
     """Self-play + training inside a training window (fresh buffer)."""
     rng = np.random.default_rng(seed)
-    buffer = ReplayBuffer(capacity=cfg.buffer_capacity, seed=seed)
+    buffer = ReplayBuffer(capacity=cfg.buffer_capacity, seed=seed,
+                          alpha=cfg.buffer_priority_alpha,
+                          is_beta=cfg.buffer_is_beta)
     env = TradingEnv(features[train_start:train_end], mu[train_start:train_end],
                      dates=None, fee_rate=cfg.env_fee_rate,
-                     n_actions=cfg.env_n_actions)
+                     n_actions=cfg.env_n_actions, obs_window=cfg.obs_window)
     trainer = MuZeroTrainer(net, cfg)
     losses = {}
     for g in range(cfg.eval_wf_games):
         game = play_episode(env, net, cfg, rng, training=True)
-        buffer.append(game)
+        buffer.append(game, trainer.value_scale)
         losses = trainer.train_epochs(buffer, cfg.eval_wf_epochs)
     return losses
 
 
 def walk_forward(features: np.ndarray, mu: np.ndarray, dates, cfg: Config,
-                 out_dir: Path, tag: str = "wf") -> dict:
+                 out_dir: Path, tag: str = "wf",
+                 ohlcv: pd.DataFrame | None = None) -> dict:
     """Full walk-forward: fit per window, test out-of-sample, stitch results."""
     out_dir.mkdir(parents=True, exist_ok=True)
     T = len(mu)
     windows = list(walk_forward_windows(T, cfg))
     stitched: list[np.ndarray] = []
     per_window = []
+    device = auto_device(cfg)
     for w_i, (ts_, te_, vs, ve) in enumerate(windows):
-        net = build_net(features.shape[1] + 1, cfg, "cpu", cfg.train_seed + w_i)
+        net = build_net(features.shape[1], cfg, device, cfg.train_seed + w_i)
         fit_on_window(net, features, mu, dates, cfg, ts_, te_, seed=cfg.train_seed + w_i)
-        df = run_policy(net, features, mu, dates, vs, ve, cfg)
+        df = run_policy(net, features, mu, dates, vs, ve, cfg, ohlcv=ohlcv)
         stitched.append(df["reward"].to_numpy())
         stats = M.summary(df["reward"].to_numpy())
         bh = M.summary(buy_hold(mu, vs, ve))

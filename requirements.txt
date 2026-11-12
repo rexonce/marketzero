@@ -6,5 +6,9 @@ matplotlib>=3.8
 pytest>=8.0
 # CPU wheel is enough: pip install torch --index-url https://download.pytorch.org/whl/cpu
 torch>=2.2
-# optional, Phase 2/3: K-line foundation model for scenario sampling
-# kronos  (pip install kronos; weights: NeoQuasar/Kronos-base / -mini)
+# optional, Phase 2/3: K-line foundation model for scenario sampling.
+# The vendored copy (marketzero/vendor/kronos_model) only needs these;
+# weights pull from HF on first use (NeoQuasar/Kronos-mini, 4M params).
+huggingface_hub>=0.20
+safetensors>=0.4
+einops>=0.7

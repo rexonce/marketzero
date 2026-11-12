@@ -63,3 +63,28 @@ def test_temperature_sampling():
     assert greedy == 1
     counts = {select_action(policy, 1.0, rng) for _ in range(200)}
     assert len(counts) > 1                     # explores under tau=1
+
+
+def test_batched_wave_mcts_invariants(net, cfg):
+    """Wave-batched leaf evals must preserve the search accounting invariants
+    and stay deterministic in eval mode."""
+    obs = np.zeros(6, dtype=np.float32)
+    res = run_mcts(net, obs, cfg, training=True, sims=24)
+    assert res["visits"].sum() == 24
+    assert res["policy"].sum() == pytest.approx(1.0)
+    a1 = run_mcts(net, obs, cfg, training=False)["action"]
+    a2 = run_mcts(net, obs, cfg, training=False)["action"]
+    assert a1 == a2
+
+
+def test_windowed_transformer_net():
+    """Windowed obs -> transformer h, and batched recurrent actions."""
+    torch.manual_seed(0)
+    net = MuZeroNet(obs_dim=5 * 4 + 1, n_actions=3, hidden=32, latent=16,
+                    support=10, window=5, n_feat=4, tx_layers=1)
+    obs = torch.randn(2, 21)
+    p, v, r, s = net.initial_inference(obs)
+    assert s.shape == (2, 16) and p.shape == (2, 3)
+    p2, v2, r2, s2 = net.recurrent_inference(
+        s, torch.tensor([0, 2]))             # batched per-row actions
+    assert p2.shape == (2, 3) and s2.shape == (2, 16)

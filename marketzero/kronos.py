@@ -81,11 +81,11 @@ class KronosScenarioSampler:
         import pandas as pd
         ctx = min(len(df), self.predictor.max_context)
         df_ctx = df.iloc[-ctx:]
-        x_ts = x_timestamp if x_timestamp is not None else df_ctx.index
+        x_ts = x_timestamp if x_timestamp is not None else pd.Series(df_ctx.index)
         if y_timestamp is None:
             last = pd.Timestamp(df_ctx.index[-1])
-            y_timestamp = pd.date_range(last + pd.Timedelta(days=1),
-                                        periods=self.pred_len, freq="D")
+            y_timestamp = pd.Series(pd.date_range(
+                last + pd.Timedelta(days=1), periods=self.pred_len, freq="D"))
         paths = []
         for _ in range(n_scenarios):
             pred_df = self.predictor.predict(
@@ -110,7 +110,7 @@ def get_sampler(kind: str = "bootstrap", **kwargs):
     raise ValueError(f"unknown sampler kind: {kind}")
 
 
-def scenario_q(net, obs: np.ndarray, actions: list[int], sampler, mu_history: np.ndarray,
+def scenario_q(net, obs: np.ndarray, actions: list[int], sampler, context,
                horizon: int, n_scenarios: int, cfg) -> dict[int, float]:
     """Chance-aware Q at the root's first ply (Phase-2 experimental hook).
 
@@ -120,12 +120,15 @@ def scenario_q(net, obs: np.ndarray, actions: list[int], sampler, mu_history: np
     across scenarios. Blend with MCTS's own Q downstream (search stays the
     primary teacher). Honest label: experimental; full chance-node MCTS is a
     roadmap item, not shipping code.
+
+    `context` is whatever the sampler consumes: a log-return history
+    (bootstrap) or a causal OHLCV DataFrame slice (Kronos).
     """
     import torch
 
     device = next(net.parameters()).device
     obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-    scen = sampler.sample(mu_history, n_scenarios, horizon)
+    scen = sampler.sample(context, n_scenarios, horizon)
     fees = cfg.env_fee_rate
     q: dict[int, float] = {}
     with torch.no_grad():

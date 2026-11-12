@@ -116,8 +116,9 @@ def load_daily(symbol: str, start: str, cache_path, force_synthetic: bool = Fals
 
 
 # ------------------------------------------------------------------ features
-def compute_features(df: pd.DataFrame, feat_window: int = 8) -> pd.DataFrame:
-    """Causal feature frame; row i sees bars <= i only."""
+def compute_features(df: pd.DataFrame, feat_window: int = 8) -> tuple[pd.DataFrame, pd.Series]:
+    """Causal feature frame; row i sees bars <= i only.
+    Returns (features, log_returns)."""
     c = df["close"]
     logret = np.log(c / c.shift(1))
     feats = pd.DataFrame(index=df.index)

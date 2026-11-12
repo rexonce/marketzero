@@ -98,30 +98,59 @@ def run_mcts(net: MuZeroNet, obs: np.ndarray, cfg, training: bool = True,
 
         mm = MinMaxStats()
         max_depth = cfg.mcts_max_depth or 0
-        for _ in range(n_sims):
-            node, path, new_node = root, [root], None
-            # selection down to first unexpanded child, honoring the depth cap
-            while node.expanded and (max_depth <= 0 or node.depth < max_depth):
-                a = max(node.children, key=lambda k: _puct(node.children[k], node.visit_count, cfg.mcts_c_puct, mm))
-                child = node.children[a]
-                path.append(child)
-                if not child.expanded:
-                    new_node = child
-                    break
-                node = child
-            if new_node is not None:
-                # expand the freshly reached leaf: g from parent, then f for priors
-                parent = path[-2]
-                a = [k for k, v in parent.children.items() if v is new_node][0]
-                p_l, v, r, s_next = net.recurrent_inference(parent.hidden, a)
-                new_node.hidden = s_next          # 1-D latent, batch rank handled in net
-                new_node.reward = float(r)
-                new_node.expand(torch.softmax(p_l, dim=-1).cpu().numpy())
-                leaf_value = float(v)
-            else:
-                # depth-capped node (or fully expanded leaf): bootstrap its Q
-                leaf_value = path[-1].q()
-            backpropagate(path, leaf_value, cfg.env_gamma, mm)
+        leaf_batch = max(1, getattr(cfg, "mcts_leaf_batch", 1))
+        sims_done = 0
+        while sims_done < n_sims:
+            wave_n = min(leaf_batch, n_sims - sims_done)
+            pend: dict[int, int] = {}              # virtual-loss visit counts
+            todo_eval, todo_leaf = [], []          # (path, leaf, action) / (path, value)
+
+            def _score(node: Node, a: int) -> float:
+                ch = node.children[a]
+                en = ch.visit_count + pend.get(id(ch), 0)
+                pv = node.visit_count + sum(
+                    pend.get(id(c), 0) for c in node.children.values())
+                u = cfg.mcts_c_puct * ch.prior * math.sqrt(pv) / (1.0 + en)
+                return mm.normalize(ch.q()) + u
+
+            # -- wave selection: collect leaf_batch leaves (virtual loss forces
+            #    distinct picks since real stats only update after the wave)
+            for _ in range(wave_n):
+                node, path, new_node = root, [root], None
+                while node.expanded and (max_depth <= 0 or node.depth < max_depth):
+                    a = max(node.children, key=lambda k: _score(node, k))
+                    child = node.children[a]
+                    path.append(child)
+                    if not child.expanded:
+                        new_node = child
+                        break
+                    node = child
+                if new_node is not None:
+                    pend[id(new_node)] = pend.get(id(new_node), 0) + 1
+                    parent = path[-2]
+                    a = [k for k, v in parent.children.items() if v is new_node][0]
+                    todo_eval.append((path, new_node, a))
+                else:
+                    # depth-capped node: bootstrap its Q without a net call
+                    leaf = path[-1]
+                    pend[id(leaf)] = pend.get(id(leaf), 0) + 1
+                    todo_leaf.append((path, leaf.q()))
+            sims_done += wave_n
+
+            # -- batched expansion: one g+f call for the whole wave
+            if todo_eval:
+                states = torch.stack([p[-2].hidden for p, _, _ in todo_eval])
+                acts = torch.as_tensor([a for _, _, a in todo_eval],
+                                       dtype=torch.long, device=device)
+                p_l, v, r, s_next = net.recurrent_inference(states, acts)
+                prios = torch.softmax(p_l, dim=-1).cpu().numpy()
+                for j, (path, leaf, _a) in enumerate(todo_eval):
+                    leaf.hidden = s_next[j]
+                    leaf.reward = float(r[j])
+                    leaf.expand(prios[j])
+                    backpropagate(path, float(v[j]), cfg.env_gamma, mm)
+            for path, value in todo_leaf:
+                backpropagate(path, value, cfg.env_gamma, mm)
 
     visits = np.array([root.children[a].visit_count for a in range(net.n_actions)], dtype=np.float64)
     policy = visits / visits.sum()

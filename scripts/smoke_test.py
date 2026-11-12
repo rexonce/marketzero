@@ -61,21 +61,26 @@ def main() -> int:
     ok("fee accounting exact")
 
     print("[4/7] MuZero networks + MCTS invariants")
-    net = MuZeroNet(obs_dim=Xs.shape[1] + 1, n_actions=cfg.env_n_actions,
+    env_o = TradingEnv(Xs, mu, fee_rate=cfg.env_fee_rate,
+                       n_actions=cfg.env_n_actions, obs_window=cfg.obs_window)
+    env_o.reset(start=300, episode_len=10)
+    o = env_o.obs()
+    net = MuZeroNet(obs_dim=env_o.n_features, n_actions=cfg.env_n_actions,
                     hidden=cfg.model_hidden, latent=cfg.model_latent,
-                    support=cfg.model_support)
-    res = run_mcts(net, np.append(Xs[300], 0.0), cfg, training=True)
+                    support=cfg.model_support, window=cfg.obs_window,
+                    n_feat=Xs.shape[1], tx_layers=cfg.model_tx_layers)
+    res = run_mcts(net, o, cfg, training=True)
     assert res["visits"].sum() == cfg.mcts_sims, res["visits"]
     assert abs(res["policy"].sum() - 1.0) < 1e-9
-    res2 = run_mcts(net, np.append(Xs[300], 0.0), cfg, training=False)
-    assert res2["action"] == run_mcts(net, np.append(Xs[300], 0.0), cfg,
+    res2 = run_mcts(net, o, cfg, training=False)
+    assert res2["action"] == run_mcts(net, o, cfg,
                                       training=False)["action"], "eval nondeterminism"
     ok(f"visits==sims, policy sums to 1, eval deterministic ({net.param_count():,} params)")
 
     print("[5/7] self-play + training step (losses finite)")
     rng = np.random.default_rng(cfg.train_seed)
     env_t = TradingEnv(Xs[:cut], mu[:cut], fee_rate=cfg.env_fee_rate,
-                       n_actions=cfg.env_n_actions)
+                       n_actions=cfg.env_n_actions, obs_window=cfg.obs_window)
     buf = ReplayBuffer(capacity=8, seed=cfg.train_seed)
     trainer = MuZeroTrainer(net, cfg)
     for _ in range(2):
@@ -90,7 +95,8 @@ def main() -> int:
         ckpt = Path(td) / "smoke.pt"
         save_checkpoint(ckpt, net, cfg, scaler)
         net2, cfg2, payload = load_checkpoint(ckpt)
-        o = np.append(Xs[500], 0.0)
+        env_o.reset(start=500, episode_len=5)
+        o = env_o.obs()
         a1 = run_mcts(net, o, cfg, training=False)["action"]
         a2 = run_mcts(net2, o, cfg2, training=False)["action"]
         assert a1 == a2, (a1, a2)

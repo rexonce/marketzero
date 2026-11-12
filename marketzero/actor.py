@@ -37,3 +37,16 @@ def play_episode(env: TradingEnv, net: MuZeroNet, cfg, rng: np.random.Generator,
         game.rewards.append(reward)
     game.compute_returns(cfg.env_gamma)
     return game
+
+
+def reanalyze_game(game: Game, net: MuZeroNet, cfg) -> None:
+    """MuZero reanalysis: re-run search on a stored game's positions and
+    replace its policy/value statistics with the *current* network's.
+
+    The trajectory (obs, actions, rewards) is fixed; only the search
+    statistics are refreshed -- old experience gets the latest, stronger
+    teacher (MuZero paper, appendix: Reanalyse)."""
+    for t in range(len(game)):
+        res = run_mcts(net, game.obs[t], cfg, training=False)
+        game.policies[t] = res["policy"]
+        game.root_values[t] = res["root_value"]

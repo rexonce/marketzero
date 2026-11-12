@@ -45,3 +45,27 @@ def test_bootstrap_scenarios():
     assert np.isfinite(paths).all()
     # block structure means consecutive draws can repeat history verbatim
     assert not np.allclose(paths[0], paths[1])
+
+
+def test_chance_rerank_bounded_and_causal():
+    """Scenario rerank may shift a weak visit leader, never a strong one."""
+    from marketzero.evaluate import _chance_rerank
+    from marketzero.models import MuZeroNet
+
+    cfg = Config()
+    cfg.mcts_chance_scenarios = 4
+    cfg.mcts_chance_horizon = 3
+    cfg.obs_window = 0           # flat-obs mode for a tiny net
+    net = MuZeroNet(obs_dim=4, n_actions=3, hidden=32, latent=16, support=5)
+    obs = np.zeros(4, dtype=np.float32)
+    sampler = BootstrapScenarioSampler(seed=3)
+    mu = np.random.default_rng(1).normal(0.0, 0.02, 300)
+
+    # dominant leader (90% of visits) -> cannot be overridden at weight 0.25
+    res = {"action": 2, "visits": np.array([1.0, 1.0, 18.0]), "policy": None}
+    assert _chance_rerank(net, obs, res, sampler, mu, cfg) == 2
+
+    # near-tie -> scenarios are allowed to break it
+    res["visits"] = np.array([5.9, 6.0, 6.1])
+    a = _chance_rerank(net, obs, res, sampler, mu, cfg)
+    assert 0 <= a < 3

@@ -6,7 +6,8 @@ data_start: "2014-01-01"
 data_cache: "data/btc_usd_daily.csv"
 
 # ---- environment ----
-feat_window: 8              # lagged daily log-returns in the observation
+feat_window: 8              # lagged daily log-returns in each bar's features
+obs_window: 64              # bars of history per observation (1 = flat vector mode)
 env_fee_rate: 0.001         # 0.1% fee per unit of turnover (per side)
 env_episode_len: 252        # self-play episode: 1 trading year (crypto = 365d/yr, ~252 used as convention)
 env_n_actions: 3            # 3 = {-1,0,+1}; 5 = {-1,-.5,0,+.5,+1}; 2 = spot-only {0,+1}
@@ -16,6 +17,7 @@ env_gamma: 0.997            # daily discount
 model_hidden: 128
 model_latent: 64
 model_support: 10           # value/reward support: 21 bins on [-1, 1]
+model_tx_layers: 2          # transformer encoder layers in h (windowed mode)
 
 # ---- MCTS ----
 mcts_sims: 32               # simulations per move during self-play
@@ -30,6 +32,9 @@ mcts_max_depth: 4           # tree depth cap in bars (0 = unbounded)
 mcts_chance_scenarios: 0    # >0 enables Phase-2 scenario reranking at eval
 mcts_chance_horizon: 4
 mcts_chance_weight: 0.25    # max fraction of sims the rerank can shift
+mcts_chance_sampler: bootstrap   # bootstrap | kronos (needs HF weights)
+kronos_model: NeoQuasar/Kronos-mini   # HF id when sampler=kronos
+mcts_leaf_batch: 8          # leaf evals batched per search wave (1 = serial)
 
 # ---- training ----
 train_games_per_iter: 8
@@ -42,6 +47,8 @@ train_w_value: 1.0          # blueprint loss weights v:p:r = 1.0:1.0:0.5
 train_w_policy: 1.0
 train_w_reward: 0.5
 train_seed: 42
+train_reanalyze_games: 1    # stored games re-searched per iteration (MuZero reanalyse)
+train_td_steps: 0           # >0 = n-step bootstrap w/ MCTS root values (0 = full MC)
 buffer_capacity: 512        # replay buffer capacity (games)
 
 # ---- walk-forward ----

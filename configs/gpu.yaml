@@ -1,0 +1,65 @@
+# GPU research configuration — blueprint-aligned, sized for a single 4090.
+# This is the "serious training" preset: transformer h over a 64-bar window,
+# 5 exposure actions, 96-sim search, reanalysis, 2 transformer layers.
+
+# ---- environment ----
+feat_window: 8
+obs_window: 64              # blueprint: 64-bar observation window
+env_fee_rate: 0.001
+env_episode_len: 256        # blueprint episode length
+env_n_actions: 5            # blueprint: {-1, -0.5, 0, +0.5, +1}
+env_gamma: 0.997
+
+# ---- networks ----
+model_hidden: 192
+model_latent: 128
+model_support: 10
+model_tx_layers: 2
+
+# ---- MCTS ----
+mcts_sims: 96               # blueprint single-GPU target is 200; 96 on CPU-GPU mix
+mcts_eval_sims: 96
+mcts_c_puct: 1.25
+mcts_dirichlet_alpha: 0.3
+mcts_dirichlet_epsilon: 0.25
+mcts_temperature: 1.0
+mcts_temp_explore_steps: 60
+mcts_temp_late: 0.25
+mcts_max_depth: 6           # blueprint single-GPU depth target
+mcts_leaf_batch: 24         # batched leaf evals per wave (GPU efficiency)
+mcts_chance_scenarios: 0    # enable (e.g. 8) for the Phase-2 chance-node run
+mcts_chance_sampler: bootstrap   # or kronos (needs vendored model + weights)
+kronos_model: NeoQuasar/Kronos-mini
+
+# ---- training ----
+train_games_per_iter: 8
+train_epochs_per_iter: 10
+train_batch_size: 256
+train_unroll: 5
+train_lr: 0.001
+train_weight_decay: 0.0001
+train_w_value: 1.0
+train_w_policy: 1.0
+train_w_reward: 0.5
+train_seed: 42
+train_reanalyze_games: 2
+train_td_steps: 40          # n-step bootstrap (raw-return units; 0 = full MC)
+buffer_capacity: 512
+buffer_priority_alpha: 1.0  # prioritized replay: sample ~ |z - v|^1 (canonical)
+buffer_is_beta: 0.5         # importance-sampling correction exponent
+
+# ---- walk-forward ----
+eval_train_window: 730
+eval_test_window: 180
+eval_purge: 10
+eval_anchored: false
+eval_wf_games: 8
+eval_wf_epochs: 10
+
+# ---- risk ----
+risk_max_drawdown: 0.20
+risk_max_daily_loss: 0.08
+risk_vol_target: 0.15
+risk_apply_vol_target: true
+
+allow_live: false
