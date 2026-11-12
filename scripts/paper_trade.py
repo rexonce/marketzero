@@ -24,9 +24,13 @@ def main() -> int:
     ap.add_argument("--config", default=None)
     args = ap.parse_args()
 
-    cfg = Config.from_yaml(args.config) if args.config else Config()
-    trader = PaperTrader(cfg.resolved_path(args.checkpoint), cfg)
+    cfg = Config.from_yaml(args.config) if args.config else None
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    trader = PaperTrader(Config().resolved_path(args.checkpoint), cfg,
+                         device=device)
     trader.check_live_gates(args.live, os.environ.get("I_UNDERSTAND_THE_RISKS"))
+    cfg = trader.cfg  # checkpoint config when --config not given
 
     df, source = load_daily(cfg.data_symbol, cfg.data_start,
                             cfg.resolved_path(cfg.data_cache))
