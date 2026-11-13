@@ -49,9 +49,10 @@ eval_train_window: 730
 eval_test_window: 180
 eval_purge: 10
 eval_anchored: false
-eval_warm_start: true       # carry net+buffer across windows (causal)
-eval_wf_games: 16           # 2x per-window self-play budget
-eval_wf_epochs: 20          # 2.5x training epochs per window
+eval_warm_start: false      # A/B result: warm-start regressed vs fresh-fit
+                            # (stitched -40.5% vs +28.7%) -- regime-bias carryover
+eval_wf_games: 24           # 3x per-window self-play budget
+eval_wf_epochs: 24          # 3x training epochs per window
 
 risk_max_drawdown: 0.20
 risk_max_daily_loss: 0.08
